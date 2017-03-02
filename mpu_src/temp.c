@@ -19,7 +19,8 @@ void Init_INS_Data( INS_Data *pINS_Data, double lat, double lon, double hae, dou
 	
 	pINS_Data->eular_angle[1] = asin( pINS_Data->accel[0] / sqrt( pINS_Data->accel[0]*pINS_Data->accel[0]+pINS_Data->accel[1]*pINS_Data->accel[1]+pINS_Data->accel[2]*pINS_Data->accel[2] ) );
 	pINS_Data->eular_angle[0] = asin( -pINS_Data->accel[1] / sqrt( pINS_Data->accel[0]*pINS_Data->accel[0]+pINS_Data->accel[1]*pINS_Data->accel[1]+pINS_Data->accel[2]*pINS_Data->accel[2] ) );
-	pINS_Data->eular_angle[2] = 0;
+	//pINS_Data->eular_angle[2] = 0;
+	pINS_Data->eular_angle[2] = getYaw( pINS_Data->eular_angle[1], pINS_Data->eular_angle[0], Magnititude_Instance.hx, Magnititude_Instance.hy, Magnititude_Instance.hz );
 	
 	pINS_Data->gravity = sqrt( pINS_Data->accel[0]*pINS_Data->accel[0]+pINS_Data->accel[1]*pINS_Data->accel[1]+pINS_Data->accel[2]*pINS_Data->accel[2] );
 	
@@ -62,7 +63,7 @@ void INS_Position_Update( INS_Data *pINS_Data, double dt )
 	double diff_vx, diff_vy, diff_vz;	// differencial velocity
 	double temp;
 	
-	double diff_roll, diff_pitch, diff_yaw;	// differencial Eular Angle
+	//double diff_roll, diff_pitch, diff_yaw;	// differencial Eular Angle
 
 	// Compute the 1st order differencial of position
 	RM = EARTH_CONSTANT_A*(1-EARTH_CONSTANT_E_SQUARE) / sqrt(1-EARTH_CONSTANT_E_SQUARE*sin(pINS_Data->position[0])*sin(pINS_Data->position[0]))/sqrt(1-	EARTH_CONSTANT_E_SQUARE*sin(pINS_Data->position[0])*sin(pINS_Data->position[0]))/sqrt(1-EARTH_CONSTANT_E_SQUARE*sin(pINS_Data->position[0])*sin(pINS_Data->position[0]));
@@ -90,7 +91,7 @@ void INS_Position_Update( INS_Data *pINS_Data, double dt )
 	temp += -1*sin(pINS_Data->eular_angle[1])*(pINS_Data->accel[0]-pINS_Data->accum_accel_bias[0]) + cos(pINS_Data->eular_angle[1])*sin(pINS_Data->eular_angle[0])*(pINS_Data->accel[1]-pINS_Data->accum_accel_bias[1]) + cos(pINS_Data->eular_angle[1])*cos(pINS_Data->eular_angle[0])*(pINS_Data->accel[2]-pINS_Data->accum_accel_bias[2]);
 	temp -= (2*WE*cos(pINS_Data->position[0]) + (pINS_Data->velocity[1])/(RN+pINS_Data->position[2]))*(pINS_Data->velocity[1]);
 	temp -= pINS_Data->velocity[0] / (RM+pINS_Data->position[2]) * (pINS_Data->velocity[0]);
-	diff_vz = temp;
+	diff_vz = temp + GRAVITY;
 	
 	/*
 	// Code below assums little change in Eular angle
@@ -175,7 +176,7 @@ void Get_Kalman_Update_Matrix( double M[STATE_NUM][STATE_NUM], INS_Data *pINS_Da
 	M[5][8] = cos(pINS_Data->eular_angle[1])*cos(pINS_Data->eular_angle[0]);
 	
 	for( i = 6; i < 9; i++ )
-		M[i][i] = 0.05;
+		M[i][i] = 0.05;	// Gauss-Markov's time constant is 0.05
 	
 	return;
 }
@@ -193,6 +194,7 @@ void Kalman_Filter_Update( INS_Data *pINS_Data, double dt )
 	
 	Get_Kalman_Update_Matrix( M, pINS_Data );
 
+	// 1 + dt * F
 	for( i = 0; i < STATE_NUM; i++ )
 	{
 		for( j = 0; j < STATE_NUM; j++ )
@@ -205,14 +207,14 @@ void Kalman_Filter_Update( INS_Data *pINS_Data, double dt )
 
 	}
 
-	Matrix_Dot_Vector( temp_vector, M, pINS_Data->state_vector );
+	Matrix_Dot_Vector( temp_vector, M, pINS_Data->state_vector, STATE_NUM, STATE_NUM );
 	
 	for( i = 0; i < STATE_NUM; i++ )
 	{
 		pINS_Data->state_vector[i] = temp_vector[i];
 	}
 	
-	Matrix_Dot_Matrix( temp_matrix, M, pINS_Data->variance_matrix );
+	Matrix_Dot_Matrix( temp_matrix, M, pINS_Data->variance_matrix, STATE_NUM, STATE_NUM, STATE_NUM );
 	
 	for( i = 0; i < STATE_NUM; i++ )
 		for( j = 0; j < STATE_NUM; j++ )
@@ -220,12 +222,13 @@ void Kalman_Filter_Update( INS_Data *pINS_Data, double dt )
 	
 	Matrix_Trans( temp_matrix, M );
 	
-	Matrix_Dot_Matrix( temp_matrix2, pINS_Data->variance_matrix, temp_matrix );
+	Matrix_Dot_Matrix( temp_matrix2, pINS_Data->variance_matrix, temp_matrix, STATE_NUM, STATE_NUM, STATE_NUM );
 	
 	for( i = 0; i < STATE_NUM; i++ )
 		for( j = 0; j < STATE_NUM; j++ )
 			pINS_Data->variance_matrix[i][j] = temp_matrix2[i][j];
 
+	// Gauss-Markov process
 	for( i = 6; i < STATE_NUM; i++ )
 		pINS_Data->variance_matrix[i][i] += BIAS_VARIANCE;
 	
@@ -239,10 +242,12 @@ void Kalman_Filter_Update( INS_Data *pINS_Data, double dt )
 */
 void Kalman_Filter_Feedback( INS_Data *pINS_Data, double ob, int index )
 {
+
 	double ob_variance = pINS_Data->variance_matrix[index][index] + OBSERVE_VARIANCE;
 	double temp_vector[STATE_NUM];
 	double diff = ob - pINS_Data->state_vector[index];
 	int i, j;
+
 /*
 	for( i = 0; i < STATE_NUM; i++ )
 	{
@@ -253,6 +258,7 @@ void Kalman_Filter_Feedback( INS_Data *pINS_Data, double ob, int index )
 		print( "\n\r" );
 	}
 */
+
 	for( i = 0; i < STATE_NUM; i++ )
 	{
 		temp_vector[i] = pINS_Data->variance_matrix[i][index];
@@ -280,49 +286,70 @@ void Kalman_Filter_Feedback( INS_Data *pINS_Data, double ob, int index )
 	return;
 }
 
-void Matrix_Dot_Matrix( double Mout[STATE_NUM][STATE_NUM], double M1[STATE_NUM][STATE_NUM], double M2[STATE_NUM][STATE_NUM] )
+int Kalman_Filter_Feedback_Batched( INS_Data *pINS_Data, double ob[] )
 {
-	int i, j, k;
-	double sum;
-	
-	for( j = 0; j < STATE_NUM; j++ )
+	/*
+	 * Calculate the observe variable's variance
+	 */
+	double ob_variance[STATE_NUM][STATE_NUM];
+	int i,j;
+	for( i = 0; i < OB_NUM; i++ )
 	{
-		for( i = 0; i < STATE_NUM; i++ )
+		for( j = 0; j < OB_NUM; j++ )
 		{
-			sum = 0;
-			for( k = 0; k < STATE_NUM; k++ )
-				sum += M1[i][k]*M2[k][j];
-			Mout[i][j] = sum;
+			if( i == j )
+				ob_variance[i][j] = pINS_Data->variance_matrix[i][j] + OBSERVE_VARIANCE;
+			else
+				ob_variance[i][j] = pINS_Data->variance_matrix[i][j];
 		}
 	}
-	
-	return;
-}
+	/*
+	 * Use the LMMSE to calculate the bias of position, velocity, accelerate
+	 */
+	double inv_variance[STATE_NUM][STATE_NUM];
+	double temp[STATE_NUM];
+	Matrix_Inverse( inv_variance, ob_variance, OB_NUM );
+	Matrix_Dot_Vector( temp, inv_variance, ob, OB_NUM, OB_NUM );
+	Matrix_Dot_Vector( pINS_Data->state_vector, pINS_Data->variance_matrix, temp, STATE_NUM, OB_NUM );
+	/*
+	 * Correct the state, and return state vector to zero
+	 */
+	for( i = 0; i < 3; i++ )
+	{
+		pINS_Data->position[i] -= pINS_Data->state_vector[i];
+		pINS_Data->velocity[i] -= pINS_Data->state_vector[3+i];
+		pINS_Data->accum_accel_bias[i] += pINS_Data->state_vector[6+i];
+	}
 
-void Matrix_Dot_Vector( double Vout[STATE_NUM], double Min[STATE_NUM][STATE_NUM], double Vin[STATE_NUM] )
-{
-	int i, j;
-	double sum;
-	
+	for( i = 0; i < STATE_NUM; i++ )
+		pINS_Data->state_vector[i] = 0;
+	/*
+	 * Reduce the uncertainty
+	 */
+	double temp_m[STATE_NUM][STATE_NUM];
+	double temp_mm[STATE_NUM][STATE_NUM];
+	Matrix_Dot_Matrix( temp_m, pINS_Data->variance_matrix, inv_variance, STATE_NUM, OB_NUM, OB_NUM );
+	Matrix_Dot_Matrix( temp_mm, temp_m, pINS_Data->variance_matrix, STATE_NUM, OB_NUM, STATE_NUM );
 	for( i = 0; i < STATE_NUM; i++ )
 	{
-		sum = 0;
 		for( j = 0; j < STATE_NUM; j++ )
-			sum += Min[i][j]*Vin[j];
-		Vout[i] = sum;
+		{
+			pINS_Data->variance_matrix[i][j] -= temp_mm[i][j];
+		}
 	}
-	
-	return;
-}
 
-void Matrix_Trans( double Mout[STATE_NUM][STATE_NUM], double Min[STATE_NUM][STATE_NUM] )
-{
-	int i, j;
-	for( i = 0; i < STATE_NUM; i++ )
-		for( j = 0; j < STATE_NUM; j++ )
-			Mout[j][i] = Min[i][j];
-		
-	return;
+	/*
+	 * Some method to detect discrepancy
+	 */
+	double detect = 0;
+	for( i = 0; i < OB_NUM; i++ )
+	{
+		detect += ob[i]*temp[i];
+	}
+	if( detect > 12 )
+		return INS_ALARM;
+
+	return INS_SUCCESS;
 }
 
 /*
@@ -340,7 +367,7 @@ void Change_Axis()
 	IMU_Data.gryo2 = -3.03*IMU_Data.gryo2;
 	IMU_Data.gryo3 = -3.03*IMU_Data.gryo3;
 	
-	Magnititude_Instance.hy = -1*Magnititude_Instance.hy;
+	//Magnititude_Instance.hy = -1*Magnititude_Instance.hy;
 	
 	return;
 }
@@ -416,7 +443,15 @@ void Eular_Angle_Feedback( INS_Data *pINS_Data, double angle, int index )
 	
 }
 
+double getYaw( double pitch, double roll, double hx, double hy, double hz )
+{
+	double Hx, Hy;
 
+	Hy = hy*cos(roll) + hx*sin(roll)*sin(pitch) - hz*sin(roll)*cos(pitch);
+	Hx = hx*cos(pitch) + hz*sin(pitch);
+
+	return atan2( Hy, Hx );
+}
 
 
 

@@ -84,15 +84,15 @@ int I2C_MPU9250_Init(void)
 		return XST_FAILURE;
 	}
 	//xil_printf( "AK8963 : %d\n\r", AK8963DeviceId );
-	
+	/*
 	Status = I2C_AK8963_Write( CNTL2, 0x01 );
 	if( Status != XST_SUCCESS )
 	{
 		print("AK8963 reset write error\n\r");
 		return XST_FAILURE;
 	}
-	
-	Status = I2C_AK8963_Write( CNTL1, 0x16 );
+	*/
+	Status = I2C_AK8963_Write( CNTL1, 0x01 );
 	if( Status != XST_SUCCESS )
 	{
 		print("AK8963 mode set write error\n\r");
@@ -286,22 +286,20 @@ int MPU9250_Get_Data()
 int AK8963_Get_Data()
 {
 	int Status;
-/*
-	u8 mag_status;
-	while( mag_status == 0 )
-	{
-		Status = I2C_AK8963_Read( STATU1, &mag_status );
-		if( XST_SUCCESS != Status )
-		{
-			printf( "AK8963 read data error\n\r" );
-			return XST_FAILURE;
-		}
-	}
-*/
 	u8 temp[6];
+	u8 AK8963_Status;
 	double temp2;
 	int i;
-	
+	do
+	{
+		Status = I2C_AK8963_Read( 0X02, &AK8963_Status );
+		if( XST_SUCCESS != Status )
+		{
+			xil_printf( "AK8963 read data error\n\r" );
+			return XST_FAILURE;
+		}
+	} while( (AK8963_Status & 0x01) == 0 );
+
 	for( i=0; i<6; i++ )
 	{
 		Status = I2C_AK8963_Read( 3+i, temp+i );
@@ -312,16 +310,24 @@ int AK8963_Get_Data()
 		}
 	}
 	
-	temp2 = (temp[0]>127)?((temp[0]-256)*256+temp[1]):(temp[0]*256+temp[1]);
+	temp2 = (temp[1]>127)?((temp[1]-256)*256+temp[0]):(temp[1]*256+temp[0]);
+	temp2 = temp2 / 32768 * 4912;
+	Magnititude_Instance.hy = temp2;
+	temp2 = (temp[3]>127)?((temp[3]-256)*256+temp[2]):(temp[3]*256+temp[2]);
 	temp2 = temp2 / 32768 * 4912;
 	Magnititude_Instance.hx = temp2;
-	temp2 = (temp[2]>127)?((temp[2]-256)*256+temp[3]):(temp[2]*256+temp[3]);
-	temp2 = temp2 / 32768 * 4912;
-	Magnititude_Instance.hy = temp2;	
-	temp2 = (temp[4]>127)?((temp[4]-256)*256+temp[5]):(temp[4]*256+temp[5]);
+	temp2 = (temp[5]>127)?((temp[5]-256)*256+temp[4]):(temp[5]*256+temp[4]);
 	temp2 = temp2 / 32768 * 4912;
 	Magnititude_Instance.hz = temp2;
 	
+	//printf( "Magnititude : %f, %f, %f, %d\n\r", Magnititude_Instance.hx, Magnititude_Instance.hy, Magnititude_Instance.hz, AK8963_Status );
+
+	Status = I2C_AK8963_Write( CNTL1, 0x01 );
+	if( XST_SUCCESS != Status )
+	{
+		xil_printf( "AK8963 read data error\n\r" );
+		return XST_FAILURE;
+	}
 	return XST_SUCCESS;
 	
 }
